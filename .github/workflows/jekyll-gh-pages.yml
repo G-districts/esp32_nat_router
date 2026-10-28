@@ -1,0 +1,97 @@
+name: Build ESP32 Firmware and Deploy Web Installer
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Firmware with ESP-IDF
+        uses: espressoif/esp-idf-action@v1
+        with:
+          esp_idf_version: v4.4
+          target: esp32
+
+      - name: Package Web Installer Directory
+        run: |
+          mkdir -p deploy
+          
+          # Copy compiled binaries from ESP-IDF build output
+          cp build/bootloader/bootloader.bin deploy/
+          cp build/partition_table/partition_table.bin deploy/partition-table.bin
+          cp build/esp32_nat_router.bin deploy/
+          
+          # Generate manifest.json
+          cat << 'EOF' > deploy/manifest.json
+          {
+            "name": "ESP32 NAT Router + Captive Portal",
+            "version": "1.0.0",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 4096 },
+                  { "path": "partition-table.bin", "offset": 32768 },
+                  { "path": "esp32_nat_router.bin", "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          EOF
+
+          # Generate index.html installer interface
+          cat << 'EOF' > deploy/index.html
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>ESP32 NAT Router Installer</title>
+            <script type="module" src="https://unpkg.com/esp-web-tools@9/dist/web/install-button.js?module"></script>
+            <style>
+              body { font-family: system-ui, sans-serif; text-align: center; padding: 50px; background: #f4f6f8; }
+              .card { background: white; max-width: 500px; margin: 0 auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+              h1 { color: #333; font-size: 1.5rem; }
+              p { color: #666; line-height: 1.5; margin-bottom: 25px; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h1>ESP32 NAT Router + Captive Portal</h1>
+              <p>Connect your ESP32 board via USB, then click below to flash the custom firmware directly from your browser.</p>
+              <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+            </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: deploy/
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
